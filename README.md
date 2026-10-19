@@ -1,6 +1,6 @@
 # MTA Jebres 2 — Presensi
 
-> A web-based attendance tracking system for **MTA Jebres 2** (a religious/community organization in Jebres, Indonesia). Built with zero framework overhead — vanilla JavaScript on Cloudflare Pages with Supabase PostgreSQL.
+> A web-based attendance tracking system for **MTA Jebres 2** (a religious/community organization in Jebres, Indonesia). Built with zero framework overhead — vanilla JavaScript on Cloudflare Pages with Cloudflare D1 (SQLite).
 
 ## Features
 
@@ -17,12 +17,12 @@
 | Layer | Technology |
 |-------|-----------|
 | Hosting | Cloudflare Pages + Pages Functions |
-| Database | Supabase PostgreSQL (free tier) |
+| Database | Cloudflare D1 (SQLite, free tier) |
 | Auth | JWT (Web Crypto API HMAC-SHA256) |
 | Backend | Vanilla JavaScript ES Modules (CF Pages Functions) |
 | Frontend | Vanilla HTML + CSS + JavaScript |
 
-Zero runtime dependencies — the codebase uses no npm packages at runtime. (`jose` and `@supabase/supabase-js` listed in `package.json` are unused; all auth is done via the native Web Crypto API, and Supabase is queried through a lightweight custom fetch-based REST client.)
+Zero runtime dependencies — the codebase uses no npm packages at runtime. All auth is done via the native Web Crypto API, and the database is accessed through the D1 binding (`env.DB`) via a small query helper.
 
 ## Project Structure
 
@@ -30,7 +30,8 @@ Zero runtime dependencies — the codebase uses no npm packages at runtime. (`jo
 ├── functions/                  # Cloudflare Pages Functions (backend API)
 │   ├── _utils/
 │   │   ├── auth.js             # JWT sign, verify, requireAuth middleware
-│   │   └── supabase.js         # Custom Supabase REST client (select, insert, update, delete, upsert)
+│   │   ├── db.js               # D1 query helper (select, insert, update, updateBy, delete, upsert)
+│   │   └── recurrence.js       # Weekly recurrence helpers
 │   └── api/
 │       ├── auth/
 │       │   ├── login.js        # POST /api/auth/login
@@ -63,18 +64,24 @@ Zero runtime dependencies — the codebase uses no npm packages at runtime. (`jo
 │       ├── admin.js            # Dashboard CRUD logic + stats
 │       ├── attendance.js       # Attendance page logic
 │       └── recap.js            # Recap page logic
-├── schema.sql                  # Database schema (fresh install)
+├── dev/                        # Local development helpers
+│   ├── init-local-db.js        # Create local SQLite DB from schema/seed
+│   ├── local-d1.js             # node:sqlite adapter exposing the D1 API
+│   └── wrangler.js             # Runs wrangler using CF_* vars from .env
+├── schema.sql                  # D1/SQLite schema (fresh install)
 ├── seed.sql                    # Test/seed data
+├── wrangler.toml               # Pages config + D1 binding
 ├── PLAN.md                     # Original implementation plan
 └── package.json
 ```
 
 ## Database Schema
 
-Five PostgreSQL tables managed via Supabase:
+Six SQLite tables managed via Cloudflare D1:
 
 | Table | Purpose |
 |-------|---------|
+| `batches` | Batches/gelombang; groups optionally belong to one |
 | `groups` | Member groups (e.g., pa-kelompok1, pemudi) |
 | `members` | Individual members (nickname + group FK) |
 | `events` | Activities/events with date, time, location, and optional weekly repeat (`repeat_type`, `repeat_days`) |
@@ -87,17 +94,32 @@ See `schema.sql` for the full DDL.
 
 ## Setup
 
-### 1. Supabase Database
+### 1. Cloudflare D1 Database
 
-1. Create a free Supabase project at [supabase.com](https://supabase.com)
-2. Open the SQL Editor and run the contents of `schema.sql`
-3. (Optional) Run `seed.sql` to populate sample data
+1. Create the database:
+   ```bash
+   npx wrangler d1 create mta-presensi
+   ```
+2. Copy the returned `database_id` into `wrangler.toml` under `[[d1_databases]]`.
+3. Apply the schema and (optionally) seed data:
+   ```bash
+   npm run db:schema   # remote
+   npm run db:seed     # remote
+   ```
 
-> **Existing database?** If your database was created before recurring events, run
-> `migrations/2026-09-06-recurring-events.sql` instead of re-running `schema.sql`.
+For a database created before recurring events, run `npm run db:migrate` instead of `db:schema`.
+
+#### Importing data exported from Supabase
+
+1. Drop the Supabase CSV exports into `data/` (`batches_rows.csv`, `groups_rows.csv`, `members_rows.csv`, `events_rows.csv`, `group_event_rows.csv`, `member_event_rows.csv`).
+2. `npm run db:import` validates referential integrity and writes `data/import.sql`.
+3. `npm run db:import:remote` regenerates and applies it to the remote D1 (clears existing rows first).
+
+`data/` is gitignored because it contains personal data.
 
 ### 2. Environment Variables
 
+`wrangler.toml` binds D1 as `DB`; no database credentials are needed at runtime.
 Set the following in your Cloudflare Pages dashboard:
 
 | Variable | Description |
@@ -105,8 +127,14 @@ Set the following in your Cloudflare Pages dashboard:
 | `ADMIN_USERNAME` | Admin login username |
 | `ADMIN_PASSWORD` | Admin login password |
 | `JWT_SECRET` | Secret key for HMAC-SHA256 JWT signing (use a long random string) |
-| `SUPABASE_URL` | Supabase project URL (e.g., `https://xxxxx.supabase.co`) |
-| `SUPABASE_SERVICE_KEY` | Supabase anon/service key (used server-side as the privileged role key) |
+
+For the CLI helpers, `.env` may also define:
+
+| Variable | Description |
+|----------|-------------|
+| `CF_DB_KEY` | Cloudflare API token with D1 edit permission |
+| `CF_DB_UUID` | D1 database ID (written into `wrangler.toml`) |
+| `CF_ACCOUNT_ID` | Cloudflare account ID |
 
 ### 3. Deploy to Cloudflare Pages
 
@@ -120,7 +148,7 @@ Set the following in your Cloudflare Pages dashboard:
 **Via Wrangler CLI:**
 
 ```bash
-npx wrangler pages deploy . --project-name mta-krpd-presensi
+npx wrangler pages deploy public --project-name mta-krpd-presensi
 ```
 
 Set env vars with:
@@ -132,11 +160,23 @@ npx wrangler pages secret put ADMIN_USERNAME
 
 ### 4. Local Development
 
+Option A — Wrangler (uses the real D1 API locally):
+
 ```bash
-npx wrangler pages dev . --binding ADMIN_USERNAME=admin --binding ADMIN_PASSWORD=secret --binding JWT_SECRET=dev-secret --binding SUPABASE_URL=<url> --binding SUPABASE_SERVICE_KEY=<key>
+npm run db:schema:local
+npm run db:seed:local
+npm run dev:cf
 ```
 
-The `wrangler pages dev` command serves `public/` statically and runs `functions/` as serverless endpoints locally.
+Option B — Express with a local SQLite file (no Wrangler needed):
+
+```bash
+npm install
+npm run db:init   # creates .wrangler/local-d1.sqlite from schema + seed
+npm run dev       # http://localhost:3000
+```
+
+Both serve `public/` statically and run `functions/` as serverless endpoints locally.
 
 ## API Reference
 

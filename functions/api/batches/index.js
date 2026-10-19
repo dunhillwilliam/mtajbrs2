@@ -1,5 +1,5 @@
 import { requireAuth } from '../../_utils/auth.js'
-import { getSupabase } from '../../_utils/supabase.js'
+import { getDb } from '../../_utils/db.js'
 
 export async function onRequestGet(context) {
   const { request, env } = context
@@ -8,8 +8,8 @@ export async function onRequestGet(context) {
   }
 
   try {
-    const supabase = getSupabase(env)
-    const data = await supabase.select('batches', { order: 'name.asc' })
+    const db = getDb(env)
+    const data = await db.select('batches', { order: 'name.asc' })
     return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } })
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })
@@ -23,9 +23,9 @@ export async function onRequestPost(context) {
   }
 
   try {
-    const supabase = getSupabase(env)
+    const db = getDb(env)
     const body = await request.json()
-    const data = await supabase.insert('batches', { name: body.name, description: body.description || '' }, { select: '*', single: true })
+    const data = await db.insert('batches', { name: body.name, description: body.description || '' }, { select: '*', single: true })
     return new Response(JSON.stringify(data), { status: 201, headers: { 'Content-Type': 'application/json' } })
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })

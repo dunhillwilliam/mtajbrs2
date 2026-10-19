@@ -4,15 +4,26 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx server.js",
+    "dev": "node server.js",
+    "dev:cf": "wrangler pages dev public",
     "start": "node server.js",
-    "build": "echo 'Build OK'"
+    "build": "echo 'Build OK'",
+    "db:init": "node dev/init-local-db.js",
+    "db:init:empty": "node dev/init-local-db.js --no-seed",
+    "db:schema": "node dev/wrangler.js d1 execute mta-presensi --remote --file=./schema.sql",
+    "db:seed": "node dev/wrangler.js d1 execute mta-presensi --remote --file=./seed.sql",
+    "db:schema:local": "node dev/wrangler.js d1 execute mta-presensi --local --file=./schema.sql",
+    "db:seed:local": "node dev/wrangler.js d1 execute mta-presensi --local --file=./seed.sql",
+    "db:migrate": "node dev/wrangler.js d1 execute mta-presensi --remote --file=./migrations/2026-09-06-recurring-events.sql",
+    "db:import": "node dev/import-supabase.js",
+    "db:import:remote": "node dev/import-supabase.js && node dev/wrangler.js d1 execute mta-presensi --remote --file=./data/import.sql"
   },
   "dependencies": {
     "dotenv": "^18.0.4",
     "express": "^5.2.1"
   },
   "devDependencies": {
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "wrangler": "^4.151.1"
   }
 }

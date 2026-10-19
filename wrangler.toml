@@ -1,0 +1,8 @@
+name = "mta-jebres-2-presensi"
+compatibility_date = "2026-09-01"
+pages_build_output_dir = "public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mta-presensi"
+database_id = "df1a5b66-6e95-4623-98a4-5617b80b6375"

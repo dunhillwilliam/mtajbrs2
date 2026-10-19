@@ -1,5 +1,5 @@
 import { requireAuth } from '../../_utils/auth.js'
-import { getSupabase } from '../../_utils/supabase.js'
+import { getDb } from '../../_utils/db.js'
 import { serializeRepeatDays } from '../../_utils/recurrence.js'
 
 export async function onRequestPut(context) {
@@ -9,10 +9,10 @@ export async function onRequestPut(context) {
   }
 
   try {
-    const supabase = getSupabase(env)
+    const db = getDb(env)
     const body = await request.json()
     const repeat = serializeRepeatDays(body.repeat_type || 'none', body.repeat_days)
-    const data = await supabase.update('events', params.id, {
+    const data = await db.update('events', params.id, {
       name: body.name,
       date: body.date,
       start_time: body.start_time || null,
@@ -35,8 +35,8 @@ export async function onRequestDelete(context) {
   }
 
   try {
-    const supabase = getSupabase(env)
-    await supabase.delete('events', params.id)
+    const db = getDb(env)
+    await db.delete('events', params.id)
     return new Response(null, { status: 204 })
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })

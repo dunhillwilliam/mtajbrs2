@@ -1,5 +1,5 @@
 import { requireAuth } from '../_utils/auth.js'
-import { getSupabase } from '../_utils/supabase.js'
+import { getDb } from '../_utils/db.js'
 import { serverToday, countOccurrencesUpTo } from '../_utils/recurrence.js'
 
 export async function onRequestGet(context) {
@@ -9,12 +9,12 @@ export async function onRequestGet(context) {
   }
 
   try {
-    const supabase = getSupabase(env)
+    const db = getDb(env)
     const [events, groupEvents, members, attendance] = await Promise.all([
-      supabase.select('events'),
-      supabase.select('group_event'),
-      supabase.select('members', { select: 'id, nickname, group_id' }),
-      supabase.select('member_event', { select: 'member_id, event_id, occurrence_date, status' }),
+      db.select('events'),
+      db.select('group_event'),
+      db.select('members', { select: 'id, nickname, group_id' }),
+      db.select('member_event', { select: 'member_id, event_id, occurrence_date, status' }),
     ])
 
     const today = serverToday()
@@ -94,14 +94,14 @@ export async function onRequestGet(context) {
     }
 
     // Build group name + batch lookup
-    const groups = await supabase.select('groups', { select: 'id, name, batch_id' })
+    const groups = await db.select('groups', { select: 'id, name, batch_id' })
     const groupNames = {}
     const groupBatchIds = {}
     for (const g of groups) {
       groupNames[g.id] = g.name
       if (g.batch_id) groupBatchIds[g.id] = g.batch_id
     }
-    const batches = await supabase.select('batches', { select: 'id, name' })
+    const batches = await db.select('batches', { select: 'id, name' })
     const batchNames = {}
     for (const b of batches) batchNames[b.id] = b.name
 

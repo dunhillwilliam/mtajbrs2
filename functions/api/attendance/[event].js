@@ -1,14 +1,14 @@
-import { getSupabase } from '../../_utils/supabase.js'
+import { getDb } from '../../_utils/db.js'
 import { serverToday, isScheduledOn } from '../../_utils/recurrence.js'
 
 const TZ_OFFSET_MS = 25200000
 
 export async function onRequestGet(context) {
   const { env, params, request } = context
-  const supabase = getSupabase(env)
+  const db = getDb(env)
 
   try {
-    const events = await supabase.select('events', {
+    const events = await db.select('events', {
       select: '*',
       filters: { id: params.event },
       limit: 1,
@@ -23,7 +23,7 @@ export async function onRequestGet(context) {
     const scheduled = isScheduledOn(event, occurrenceDate)
     const inWindow = scheduled ? isInTimeWindow(event, occurrenceDate) : false
 
-    const groupLinks = await supabase.select('group_event', {
+    const groupLinks = await db.select('group_event', {
       select: 'group_id',
       filters: { event_id: params.event },
     })
@@ -34,19 +34,19 @@ export async function onRequestGet(context) {
 
     const groupIds = groupLinks.map(g => g.group_id)
 
-    const groups = await supabase.select('groups', {
+    const groups = await db.select('groups', {
       select: 'id, name',
       filters: { id: groupIds },
       order: 'name.asc',
     })
 
-    const members = await supabase.select('members', {
+    const members = await db.select('members', {
       select: 'id, nickname, group_id',
       filters: { group_id: groupIds },
       order: 'nickname.asc',
     })
 
-    const existingAttendance = await supabase.select('member_event', {
+    const existingAttendance = await db.select('member_event', {
       select: 'member_id, status, notes',
       filters: { event_id: params.event, occurrence_date: occurrenceDate },
     })
@@ -78,10 +78,10 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
   const { request, env, params } = context
-  const supabase = getSupabase(env)
+  const db = getDb(env)
 
   try {
-    const events = await supabase.select('events', {
+    const events = await db.select('events', {
       select: '*',
       filters: { id: params.event },
       limit: 1,
@@ -126,7 +126,7 @@ export async function onRequestPost(context) {
       updated_at: new Date().toISOString(),
     }))
 
-    const results = await supabase.upsert('member_event', prepared, 'member_id,event_id,occurrence_date')
+    const results = await db.upsert('member_event', prepared, 'member_id,event_id,occurrence_date')
     return new Response(JSON.stringify(results), { status: 200, headers: { 'Content-Type': 'application/json' } })
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })

@@ -1,5 +1,5 @@
 import { requireAuth } from '../../../_utils/auth.js'
-import { getSupabase } from '../../../_utils/supabase.js'
+import { getDb } from '../../../_utils/db.js'
 
 export async function onRequestPost(context) {
   const { request, env, params } = context
@@ -8,7 +8,7 @@ export async function onRequestPost(context) {
   }
 
   try {
-    const supabase = getSupabase(env)
+    const db = getDb(env)
     const body = await request.json()
     const groupIds = body.group_ids
 
@@ -17,7 +17,7 @@ export async function onRequestPost(context) {
     }
 
     const records = groupIds.map(group_id => ({ group_id, event_id: params.id }))
-    const data = await supabase.insert('group_event', records, { select: '*' })
+    const data = await db.insert('group_event', records, { select: '*' })
     return new Response(JSON.stringify(data), { status: 201, headers: { 'Content-Type': 'application/json' } })
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } })
@@ -31,8 +31,8 @@ export async function onRequestGet(context) {
   }
 
   try {
-    const supabase = getSupabase(env)
-    const data = await supabase.select('group_event', {
+    const db = getDb(env)
+    const data = await db.select('group_event', {
       select: '*,groups(name)',
       filters: { event_id: params.id },
     })

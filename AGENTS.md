@@ -6,7 +6,7 @@ A zero-framework web attendance app for MTA Jebres 2, deployed on Cloudflare Pag
 
 **Language:** 100% JavaScript (ES Modules)
 **Hosting:** Cloudflare Pages + Pages Functions
-**Database:** Supabase PostgreSQL (REST API)
+**Database:** Cloudflare D1 (SQLite) via the `DB` binding
 **Auth:** Custom JWT via Web Crypto API (HMAC-SHA256)
 **Runtime deps:** None (npm deps in package.json are unused)
 
@@ -16,7 +16,7 @@ A zero-framework web attendance app for MTA Jebres 2, deployed on Cloudflare Pag
 Browser → Cloudflare Pages
   ├── public/        → static HTML/CSS/JS (served directly)
   └── functions/     → serverless endpoints (CF Pages Functions)
-                          └── Supabase REST API (via custom fetch client)
+                          └── D1 database (via env.DB binding)
 ```
 
 ## File Reference
@@ -26,7 +26,7 @@ Browser → Cloudflare Pages
 | File | Purpose | Key exports |
 |------|---------|-------------|
 | `functions/_utils/auth.js` | JWT utilities | `signToken(secret)`, `verifyToken(token, secret)`, `requireAuth(request, env)` |
-| `functions/_utils/supabase.js` | Custom Supabase REST client | `getSupabase(env)` returns object with `.select()`, `.insert()`, `.update()`, `.updateBy()`, `.delete()`, `.upsert()` |
+| `functions/_utils/db.js` | D1 query helper | `getDb(env)` returns object with `.select()`, `.insert()`, `.update()`, `.updateBy()`, `.delete()`, `.upsert()` |
 | `functions/api/auth/login.js` | Admin auth | `onRequestPost` — validates credentials against env vars, returns JWT |
 | `functions/api/auth/verify.js` | JWT validation | `onRequestGet` — returns 200 if valid JWT |
 | `functions/api/batches/index.js` | Batches (gelombang) CRUD | `onRequestGet`, `onRequestPost` |
@@ -61,28 +61,28 @@ Browser → Cloudflare Pages
 
 | File | Purpose |
 |------|---------|
-| `schema.sql` | Full database DDL (5 tables with FK constraints, CHECK constraints, UNIQUE tuples) |
+| `schema.sql` | Full D1/SQLite DDL (6 tables with FK constraints, CHECK constraints, UNIQUE tuples) |
 | `migrations/` | SQL migrations to upgrade existing databases |
 | `seed.sql` | Seed data with 2 batches, 7 groups and ~90 members |
+| `wrangler.toml` | Pages config and D1 binding (`DB`) |
+| `dev/` | Local dev helpers: `init-local-db.js`, `local-d1.js`, `wrangler.js`, `import-supabase.js` |
 | `PLAN.md` | Original project plan and design document |
 
 ## Database Schema
 
-6 tables in Supabase PostgreSQL:
+6 tables in Cloudflare D1 (SQLite). IDs are `TEXT` UUIDs; dates/times/timestamps are stored as `TEXT`.
 
-**`batches`** — `id UUID PK`, `name TEXT NOT NULL`, `description TEXT`, `created_at TIMESTAMPTZ`
+**`batches`** — `id TEXT PK`, `name TEXT NOT NULL`, `description TEXT NOT NULL DEFAULT ''`, `created_at TEXT DEFAULT datetime('now')`
 
-**`events`** — `id UUID PK`, `name TEXT NOT NULL`, `date DATE NOT NULL` (reference/start date), `start_time TIME`, `end_time TIME`, `location TEXT`, `description TEXT`, `repeat_type TEXT NOT NULL DEFAULT 'none'` (`none` or `weekly`), `repeat_days TEXT NOT NULL DEFAULT ''` (comma-separated weekday numbers `0=Sun..6=Sat`), `created_at TIMESTAMPTZ`
+**`groups`** — `id TEXT PK`, `name TEXT NOT NULL`, `description TEXT NOT NULL DEFAULT ''`, `batch_id TEXT → batches(id) ON DELETE SET NULL`, `created_at TEXT`
 
-**`groups`** — `id UUID PK`, `name TEXT NOT NULL`, `description TEXT`, `batch_id UUID → batches(id) ON DELETE SET NULL`, `created_at TIMESTAMPTZ`
+**`members`** — `id TEXT PK`, `nickname TEXT NOT NULL`, `group_id TEXT NOT NULL → groups(id) ON DELETE CASCADE`, `created_at TEXT`
 
-**`members`** — `id UUID PK`, `nickname TEXT NOT NULL`, `group_id UUID NOT NULL → groups(id) ON DELETE CASCADE`, `created_at TIMESTAMPTZ`
+**`events`** — `id TEXT PK`, `name TEXT NOT NULL`, `date TEXT NOT NULL` (reference/start date), `start_time TEXT`, `end_time TEXT`, `location TEXT NOT NULL DEFAULT ''`, `description TEXT NOT NULL DEFAULT ''`, `repeat_type TEXT NOT NULL DEFAULT 'none'` (`none` or `weekly`), `repeat_days TEXT NOT NULL DEFAULT ''` (comma-separated weekday numbers `0=Sun..6=Sat`), `created_at TEXT`. Recurring template; attendance link is stable and reused each occurrence.
 
-**`events`** — recurring template (see above); attendance link is stable and reused each occurrence
+**`group_event`** — `id TEXT PK`, `group_id TEXT → groups(id) ON DELETE CASCADE`, `event_id TEXT → events(id) ON DELETE CASCADE`, UNIQUE(group_id, event_id)
 
-**`group_event`** — `id UUID PK`, `group_id UUID → groups(id) ON DELETE CASCADE`, `event_id UUID → events(id) ON DELETE CASCADE`, UNIQUE(group_id, event_id)
-
-**`member_event`** — `id UUID PK`, `member_id UUID → members(id) ON DELETE CASCADE`, `event_id UUID → events(id) ON DELETE CASCADE`, `occurrence_date DATE NOT NULL`, `status TEXT CHECK (IN 'hadir','sakit','izin','alpha')`, `notes TEXT`, UNIQUE(member_id, event_id, occurrence_date)
+**`member_event`** — `id TEXT PK`, `member_id TEXT → members(id) ON DELETE CASCADE`, `event_id TEXT → events(id) ON DELETE CASCADE`, `occurrence_date TEXT NOT NULL`, `status TEXT CHECK (IN 'hadir','sakit','izin','alpha')`, `notes TEXT NOT NULL DEFAULT ''`, UNIQUE(member_id, event_id, occurrence_date)
 
 ## API Patterns
 
@@ -107,15 +107,17 @@ if (!await requireAuth(request, env)) {
 }
 ```
 
-### Supabase Client Usage
+### D1 Client Usage
 
 All endpoints use the same pattern:
 ```js
-const supabase = getSupabase(env)
-const result = await supabase.select('table', { filters: { column: value }, order: 'column.asc' })
+const db = getDb(env)
+const result = await db.select('table', { filters: { column: value }, order: 'column.asc' })
 ```
 
-Available methods: `select`, `insert`, `update`, `updateBy`, `delete`, `upsert`. See `functions/_utils/supabase.js` for full signatures. The client uses Supabase REST API directly via `fetch`.
+Available methods: `select`, `insert`, `update`, `updateBy`, `delete`, `upsert`. See `functions/_utils/db.js` for full signatures. It builds parameterized SQL and runs it through the D1 binding (`env.DB`). IDs are generated in the app with `crypto.randomUUID()`; timestamps default to SQLite `datetime('now')`.
+
+Join selects (`groups(name)`, `batches(name)`) are supported via a `LEFT JOIN` and are returned as nested objects, matching the previous REST client shape.
 
 ### Response Format
 
@@ -145,7 +147,7 @@ The `API` singleton in `public/js/api.js` wraps fetch with:
 
 ## Important Design Decisions
 
-1. **No runtime npm dependencies** — `jose` and `@supabase/supabase-js` are declared in package.json but never imported. All functionality uses native APIs. Do not add imports from these packages.
+1. **No runtime npm dependencies** — All functionality uses native APIs (Web Crypto, D1 binding). Do not add runtime npm imports. (`express`/`dotenv` are used only by the local `server.js` dev harness.)
 2. **Public attendance** — The attendance GET/POST endpoints deliberately skip auth so anyone with the event URL can record attendance.
 3. **Batch upsert** — All attendance for an event's occurrence is submitted in one request and upserted by `(member_id, event_id, occurrence_date)`. The unique tuple includes `occurrence_date`, so each occurrence's attendance is stored separately and the form resets between occurrences.
 4. **Cascading deletes** — Deleting a group cascade-deletes its members and their attendance records. The DB schema enforces this via `ON DELETE CASCADE`.
@@ -159,14 +161,14 @@ The `API` singleton in `public/js/api.js` wraps fetch with:
 | `ADMIN_USERNAME` | `functions/api/auth/login.js` |
 | `ADMIN_PASSWORD` | `functions/api/auth/login.js` |
 | `JWT_SECRET` | `functions/_utils/auth.js` (signToken, verifyToken) |
-| `SUPABASE_URL` | `functions/_utils/supabase.js` (constructs REST endpoint) |
-| `SUPABASE_SERVICE_KEY` | `functions/_utils/supabase.js` (API key header) |
+
+The database is provided by the D1 binding `DB` in `wrangler.toml` — not an env var. Local CLI helpers in `dev/wrangler.js` additionally read `CF_DB_KEY`, `CF_DB_UUID`, and `CF_ACCOUNT_ID` from `.env`.
 
 ## Common Tasks
 
 **Adding a new admin-only endpoint:**
 1. Create file in `functions/api/<resource>/<action>.js`
-2. Import `requireAuth` from `../../_utils/auth` and `getSupabase` from `../../_utils/supabase`
+2. Import `requireAuth` from `../../_utils/auth` and `getDb` from `../../_utils/db`
 3. Export `onRequestGet` / `onRequestPost` etc.
 4. Call `requireAuth(request, env)` at the top, return 401 if null
 
